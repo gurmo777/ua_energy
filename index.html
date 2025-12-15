@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ОЕС України: Топологія (ENTSO-E Style)</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Markdown parsing for AI response -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <style>
+        body { font-family: 'JetBrains Mono', monospace; background-color: #0f1012; color: #e2e8f0; overflow: hidden; }
+        #map { height: 100vh; width: 100%; z-index: 1; background: #0f1012; }
+
+        /* Стилі маркерів */
+        .marker-label {
+            font-size: 10px;
+            color: #94a3b8;
+            text-shadow: 0 0 2px #000;
+            white-space: nowrap;
+            margin-top: -12px;
+            text-align: center;
+            font-weight: bold;
+        }
+        
+        /* Іконки станцій */
+        .icon-npp { background: #00ff9d; border: 2px solid #fff; box-shadow: 0 0 10px #00ff9d; border-radius: 50%; }
+        .icon-tpp { background: #ff3333; border: 1px solid #fff; border-radius: 0; transform: rotate(45deg); }
+        .icon-sub { background: #ffaa00; border: 1px solid #fff; border-radius: 50%; }
+        
+        /* Панель */
+        .info-box {
+            position: absolute; bottom: 30px; left: 20px; width: 320px;
+            background: rgba(0, 0, 0, 0.85); border: 1px solid #333;
+            padding: 15px; border-radius: 4px; z-index: 1000;
+            font-size: 11px;
+        }
+
+        /* Легенда ліній */
+        .line-750 { height: 3px; background: #fff; width: 30px; display: inline-block; }
+        .line-330 { height: 1px; background: #00ff9d; width: 30px; display: inline-block; }
+        .line-off { border-top: 2px dashed #ff3333; width: 30px; display: inline-block; height: 1px; }
+        .line-load { border-top: 2px dashed #ffaa00; width: 30px; display: inline-block; height: 1px; }
+
+        /* AI Modal */
+        #ai-modal {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80%;
+            max-width: 600px;
+            max-height: 80vh;
+            background: rgba(15, 16, 18, 0.95);
+            border: 1px solid #00ff9d;
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 2000;
+            overflow-y: auto;
+            box-shadow: 0 0 30px rgba(0, 255, 157, 0.2);
+            backdrop-filter: blur(10px);
+        }
+
+        .ai-btn {
+            background: linear-gradient(45deg, #10b981, #059669);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 10px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+        .ai-btn:hover {
+            filter: brightness(1.1);
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            cursor: pointer;
+            color: #94a3b8;
+            font-size: 20px;
+        }
+        
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 { color: #00ff9d; margin-top: 10px; margin-bottom: 5px; }
+        .markdown-body p { margin-bottom: 10px; color: #cbd5e1; }
+        .markdown-body strong { color: #fff; }
+        .markdown-body ul { list-style: disc; padding-left: 20px; margin-bottom: 10px; color: #94a3b8; }
+
+        /* Loading Spinner */
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.1);
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border-left-color: #00ff9d;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <div class="info-box">
+        <h2 class="text-white font-bold text-sm mb-2">ЛЕГЕНДА (ENTSO-E Style)</h2>
+        
+        <div class="space-y-2 text-gray-300">
+            <div class="flex items-center"><span class="line-750 mr-2"></span> 750 кВ (Магістраль)</div>
+            <div class="flex items-center"><span class="line-330 mr-2"></span> 330 кВ (Розподіл)</div>
+            <div class="flex items-center"><span class="line-off mr-2"></span> ОБРИВ / ПОШКОДЖЕНО</div>
+            <div class="flex items-center"><span class="line-load mr-2"></span> ПЕРЕВАНТАЖЕННЯ (Вузьке місце)</div>
+            
+            <div class="mt-4 pt-2 border-t border-gray-700">
+                <div class="flex items-center mb-1"><div class="w-3 h-3 icon-npp mr-2"></div> АЕС (База)</div>
+                <div class="flex items-center"><div class="w-3 h-3 icon-tpp mr-2"></div> ТЕС (Маневр/Знищено)</div>
+            </div>
+        </div>
+        
+        <div class="mt-4 text-xs text-orange-400 mb-2">
+            * Натисніть на лінію або місто для деталей.
+        </div>
+
+        <button id="ai-analyze-btn" class="ai-btn">
+            <span>✨</span> Аналіз Ситуації (AI)
+        </button>
+    </div>
+
+    <!-- AI Modal -->
+    <div id="ai-modal">
+        <div class="close-btn" onclick="document.getElementById('ai-modal').style.display='none'">&times;</div>
+        <div class="flex items-center gap-3 mb-4 border-b border-gray-700 pb-2">
+            <div class="text-2xl">⚡</div>
+            <h2 class="text-xl font-bold text-white">Звіт Диспетчера (AI Gemini)</h2>
+        </div>
+        <div id="ai-content" class="text-sm markdown-body min-h-[100px]">
+            <!-- Content will be injected here -->
+        </div>
+    </div>
+
+    <script type="module">
+        import { GoogleGenerativeAI } from "https://esm.run/@google/generative-ai";
+
+        // --- GEMINI SETUP ---
+        async function runGeminiAnalysis() {
+            const modal = document.getElementById('ai-modal');
+            const contentDiv = document.getElementById('ai-content');
+            modal.style.display = 'block';
+            contentDiv.innerHTML = '<div class="flex flex-col items-center justify-center h-40 gap-4"><div class="spinner"></div><div class="text-gray-400">Аналіз топології мережі...</div></div>';
+
+            try {
+                // Prepare Data Snapshot for AI
+                const gridSnapshot = {
+                    nodes: nodes,
+                    links: links.map(l => ({
+                        from: nodes[l.from].name,
+                        to: nodes[l.to].name,
+                        voltage: l.type,
+                        status: l.s === 1 ? "OK" : l.s === 2 ? "OVERLOADED" : "BROKEN",
+                        note: l.note || ""
+                    }))
+                };
+
+                const prompt = `
+                    Ти - експертний диспетчер Укренерго. Проаналізуй поточний стан енергосистеми на основі наданих даних JSON.
+                    
+                    Дані: ${JSON.stringify(gridSnapshot)}
+                    
+                    Твоє завдання:
+                    1. Коротко описати загальний стан системи (стабільність).
+                    2. Пояснити, чому в конкретних регіонах (Дніпро, Харків, Одеса) є проблеми, посилаючись на конкретні лінії (BROKEN або OVERLOADED).
+                    3. Надати прогноз ризиків.
+                    
+                    Відповідай українською мовою. Використовуй професійну, але зрозумілу термінологію. Форматуй відповідь у Markdown (жирний шрифт, списки). Будь лаконічним.
+                `;
+
+                const apiKey = ""; // System provides key
+                const genAI = new GoogleGenerativeAI(apiKey);
+                const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-preview-09-2025" });
+
+                const result = await model.generateContent(prompt);
+                const response = await result.response;
+                const text = response.text();
+
+                contentDiv.innerHTML = marked.parse(text);
+
+            } catch (error) {
+                console.error(error);
+                contentDiv.innerHTML = `<div class="text-red-500">Помилка генерації звіту: ${error.message}. Будь ласка, спробуйте пізніше.</div>`;
+            }
+        }
+
+        // Expose function to global scope for button
+        document.getElementById('ai-analyze-btn').addEventListener('click', runGeminiAnalysis);
+
+
+        // --- MAP LOGIC (Leaflet) ---
+        // Ініціалізація карти в стилі "Dark Matter"
+        const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([48.5, 31.0], 6);
+        
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            maxZoom: 18, opacity: 1
+        }).addTo(map);
+        L.control.zoom({ position: 'topright' }).addTo(map);
+
+        // --- ТОЧКИ (Координати підігнані під реальну топологію) ---
+        const nodes = {
+            // АТОМНІ СТАНЦІЇ
+            'raes': { name: 'Рівненська АЕС', type: 'npp', loc: [51.32, 25.89] },
+            'khaes': { name: 'Хмельницька АЕС', type: 'npp', loc: [50.30, 26.65] },
+            'puaes': { name: 'ПУАЕС', type: 'npp', loc: [47.81, 31.21] },
+            'zaes': { name: 'ЗАЕС (Окуп.)', type: 'tpp', loc: [47.51, 34.58] }, // Червона бо не працює на нас
+
+            // ТЕС (Ключові вузли генерації/споживання)
+            'burshtyn': { name: 'Бурштин', type: 'tpp', loc: [49.20, 24.66] },
+            'tryp': { name: 'Трипільська', type: 'tpp', loc: [50.13, 30.73] },
+            'zmiev': { name: 'Зміївська', type: 'tpp', loc: [49.58, 36.54] },
+            'kurahovo': { name: 'Курахівська', type: 'tpp', loc: [47.98, 37.25] },
+
+            // ПІДСТАНЦІЇ / МІСТА (Вузли комутації)
+            'lviv': { name: 'Львів', type: 'sub', loc: [49.84, 24.02] },
+            'mukachevo': { name: 'Мукачеве', type: 'sub', loc: [48.44, 22.71] },
+            'kovel': { name: 'Ковель', type: 'sub', loc: [51.21, 24.71] },
+            
+            'kyiv': { name: 'Київ', type: 'sub', loc: [50.45, 30.52] },
+            'zhytomyr': { name: 'Житомир', type: 'sub', loc: [50.25, 28.65] },
+            'vin750': { name: 'Вінниця-750', type: 'sub', loc: [49.1, 28.8] }, // ПС 750
+            
+            'konotop': { name: 'Конотоп', type: 'sub', loc: [51.23, 33.20] },
+            'sumy': { name: 'Суми', type: 'sub', loc: [50.90, 34.79] },
+            'kharkiv': { name: 'Харків', type: 'sub', loc: [49.99, 36.23] },
+            
+            'poltava': { name: 'Полтава', type: 'sub', loc: [49.58, 34.55] },
+            'cherkasy': { name: 'Черкаси', type: 'sub', loc: [49.44, 32.05] },
+            'kremenchuk': { name: 'Кременчук', type: 'sub', loc: [49.06, 33.40] },
+            
+            'dnipro': { name: 'Дніпро', type: 'sub', loc: [48.46, 35.04] },
+            'kamenske': { name: 'Кам\'янське', type: 'sub', loc: [48.51, 34.61] },
+            'pavlohrad': { name: 'Павлоград', type: 'sub', loc: [48.52, 35.87] },
+            'lozova': { name: 'Лозова', type: 'sub', loc: [48.89, 36.38] },
+            'kryvyi': { name: 'Кривий Ріг', type: 'sub', loc: [47.91, 33.39] },
+            
+            'mykolaiv': { name: 'Миколаїв', type: 'sub', loc: [46.97, 31.99] },
+            'odesa': { name: 'Одеса', type: 'sub', loc: [46.48, 30.72] },
+            'moldova': { name: 'МолДРЕС', type: 'tpp', loc: [46.6, 29.9] } // Для розуміння транзиту
+        };
+
+        // --- ЛІНІЇ (Вектори) ---
+        // type: 750 (Магістраль), 330 (Розподіл)
+        // status: 1 (OK), 2 (WARN/Load), 3 (FAIL/Cut)
+        const links = [
+            // === 750 кВ ХРЕБЕТ ===
+            { from: 'raes', to: 'kyiv', type: 750, s: 2, note: 'Магістраль "Захід-Київ" (ПС Київська)' },
+            { from: 'raes', to: 'vin750', type: 750, s: 1 },
+            { from: 'khaes', to: 'vin750', type: 750, s: 1 },
+            { from: 'puaes', to: 'vin750', type: 750, s: 1 },
+            { from: 'vin750', to: 'kyiv', type: 750, s: 1 },
+            // РОЗРИВ ХРЕБТА:
+            { from: 'vin750', to: 'dnipro', type: 750, s: 3, note: 'ОБРИВ: Дніпровська магістраль пошкоджена' },
+            { from: 'zaes', to: 'dnipro', type: 750, s: 3, note: 'ОБРИВ: ЗАЕС відключена' },
+
+            // === 330 кВ ЗАХІДНЕ КІЛЬЦЕ ===
+            { from: 'raes', to: 'lviv', type: 330, s: 1 },
+            { from: 'raes', to: 'kovel', type: 330, s: 1 },
+            { from: 'kovel', to: 'lviv', type: 330, s: 1 },
+            { from: 'khaes', to: 'lviv', type: 330, s: 1 },
+            { from: 'burshtyn', to: 'lviv', type: 330, s: 2 }, // Бурштинський острів
+            { from: 'burshtyn', to: 'mukachevo', type: 330, s: 1 },
+            { from: 'burshtyn', to: 'khaes', type: 330, s: 1 },
+
+            // === 330 кВ ПІВНІЧНИЙ ПОТІК ===
+            { from: 'kyiv', to: 'konotop', type: 330, s: 1, note: 'ПС "Конотоп"' },
+            { from: 'konotop', to: 'sumy', type: 330, s: 1 },
+            { from: 'sumy', to: 'kharkiv', type: 330, s: 2, note: 'Ввід у Харків (Північ)' },
+            { from: 'kyiv', to: 'zhytomyr', type: 330, s: 1 },
+            { from: 'zhytomyr', to: 'raes', type: 330, s: 1 },
+
+            // === 330 кВ ЦЕНТР І ДНІПРО ===
+            { from: 'kyiv', to: 'cherkasy', type: 330, s: 2, note: 'Транзит Київ-Дніпро' },
+            { from: 'cherkasy', to: 'kremenchuk', type: 330, s: 1 },
+            { from: 'kremenchuk', to: 'poltava', type: 330, s: 1 },
+            { from: 'poltava', to: 'kharkiv', type: 330, s: 2, note: 'Ввід у Харків (Захід)' },
+            
+            // ВУЗЛИ ДНІПРА
+            { from: 'kremenchuk', to: 'kamenske', type: 330, s: 1 },
+            { from: 'kamenske', to: 'dnipro', type: 330, s: 2, note: 'Перевантаження: основний шлях на Дніпро' },
+            { from: 'dnipro', to: 'pavlohrad', type: 330, s: 1 },
+            { from: 'pavlohrad', to: 'lozova', type: 330, s: 1 },
+            { from: 'lozova', to: 'kharkiv', type: 330, s: 2, note: 'Ввід у Харків (Південь)' },
+            
+            // КРИВБАС
+            { from: 'puaes', to: 'kryvyi', type: 330, s: 1 },
+            { from: 'kryvyi', to: 'dnipro', type: 330, s: 1 },
+            { from: 'kryvyi', to: 'kamenske', type: 330, s: 1 },
+
+            // === 330 кВ ПІВДЕНЬ ===
+            { from: 'puaes', to: 'mykolaiv', type: 330, s: 1, note: 'Лінія "Трихати"' },
+            { from: 'mykolaiv', to: 'odesa', type: 330, s: 2, note: 'Вузьке місце Одеси' },
+            { from: 'puaes', to: 'odesa', type: 330, s: 2, note: 'Прямий транзит (Аджалик)' },
+            // Транзит через Молдову (схематично)
+            { from: 'odesa', to: 'moldova', type: 330, s: 1, note: 'Транзит МДРЕС' }
+        ];
+
+        // --- RENDER ---
+
+        // Лінії
+        links.forEach(l => {
+            const p1 = nodes[l.from].loc;
+            const p2 = nodes[l.to].loc;
+            
+            let color, dash, weight, opacity;
+
+            // Стилі за напругою (як в ENTSO-E: 750=Білий/Червоний, 330=Зелений)
+            if (l.type === 750) {
+                color = '#fff'; weight = 3; opacity = 0.9;
+            } else {
+                color = '#00ff9d'; weight = 1; opacity = 0.6; // ENTSO-E Greenish
+            }
+
+            // Статуси
+            if (l.s === 3) { color = '#ff3333'; dash = '5, 10'; weight = 2; opacity = 0.8; } // Broken
+            if (l.s === 2) { color = '#ffaa00'; dash = '5, 5'; weight = 2; opacity = 1; } // Loaded
+
+            const line = L.polyline([p1, p2], {
+                color: color, weight: weight, opacity: opacity, dashArray: dash
+            }).addTo(map);
+            
+            line.bindTooltip(`${l.type} кВ: ${nodes[l.from].name} -> ${nodes[l.to].name} <br/> ${l.note || ''}`, { sticky: true });
+        });
+
+        // Вузли
+        Object.keys(nodes).forEach(k => {
+            const n = nodes[k];
+            let cssClass = '';
+            let size = 8;
+            
+            if (n.type === 'npp') { cssClass = 'icon-npp'; size = 14; }
+            else if (n.type === 'tpp') { cssClass = 'icon-tpp'; size = 10; }
+            else { cssClass = 'icon-sub'; size = 6; }
+
+            const icon = L.divIcon({
+                className: '',
+                html: `
+                    <div style="position:relative; width:${size}px; height:${size}px;">
+                        <div class="${cssClass}" style="width:100%; height:100%;"></div>
+                        <div class="marker-label">${n.name}</div>
+                    </div>
+                `,
+                iconSize: [size, size],
+                iconAnchor: [size/2, size/2]
+            });
+
+            L.marker(n.loc, { icon: icon }).addTo(map)
+             .bindPopup(`<b style="color:black">${n.name}</b><br/>Тип: ${n.type.toUpperCase()}`);
+        });
+
+    </script>
+</body>
+</html>
